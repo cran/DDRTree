@@ -3,6 +3,7 @@
 #' @param C data matrix used for PCA projection
 #' @param L number for the top principal components
 #' @import irlba irlba
+#' @importFrom stats qnorm
 #' @export
 pca_projection_R <- function(C, L) {
     if (L >= min(dim(C))){
@@ -16,7 +17,8 @@ pca_projection_R <- function(C, L) {
         W <- U[, eig_idx[1:L]]
         return (W)
     } else{
-        eigen_res <- irlba::irlba(C, nv = L)
+        initial_v <- as.matrix(qnorm(1:(ncol(C) + 1)/(ncol(C) + 1))[1:ncol(C)])
+        eigen_res <- irlba::irlba(C, nv = L, v = initial_v)
         U <- eigen_res$u
         V <- eigen_res$v
         return (V)
@@ -33,7 +35,8 @@ get_major_eigenvalue <- function(C, L) {
         return (base::norm(C, '2')^2);
     }else{
         #message("using irlba")
-        eigen_res <- irlba(C, nv = L)
+        initial_v <- as.matrix(qnorm(1:(ncol(C) + 1)/(ncol(C) + 1))[1:ncol(C)])
+        eigen_res <- irlba(C, nv = L, v = initial_v)
         return (max(abs(eigen_res$v)))
     }
     #     eig_sort <- sort(V, decreasing = T, index.return = T)
@@ -59,6 +62,9 @@ sqdist_R <- function(a, b) {
 
 #' Perform DDRTree construction
 #' @param X a matrix with \eqn{\mathbf{D \times N}} dimension which is needed to perform DDRTree construction
+#' @param initial_method a function to take the data transpose of X as input and then output the reduced dimension,
+#' row number should not larger than observation and column number should not be larger than variables (like isomap may only
+#' return matrix on valid sample sets). Sample names of returned reduced dimension should be preserved.
 #' @param dimensions reduced dimension
 #' @param maxIter maximum iterations
 #' @param sigma bandwidth parameter
@@ -67,6 +73,7 @@ sqdist_R <- function(a, b) {
 #' @param param.gamma regularization parameter for k-means (the prefix of 'param' is used to avoid name collision with gamma)
 #' @param tol relative objective difference
 #' @param verbose emit extensive debug output
+#' @param ... additional arguments passed to DDRTree
 #' @importFrom stats kmeans
 #' @return a list with W, Z, stree, Y, history
 #' W is the orthogonal set of d (dimensions) linear basis vector
@@ -107,20 +114,30 @@ sqdist_R <- function(a, b) {
 #'
 DDRTree <- function(X,
                         dimensions = 2,
+                        initial_method = NULL,
                         maxIter = 20,
                         sigma = 1e-3,
                         lambda = NULL,
                         ncenter = NULL,
                         param.gamma = 10,
                         tol = 1e-3,
-                        verbose = F) {
+                        verbose = F, ...) {
 
     D <- nrow(X)
     N <- ncol(X)
 
     #initialization
     W <- pca_projection_R(X %*% t(X), dimensions)
-    Z <- t(W) %*% X
+    if(is.null(initial_method)){
+        Z <- t(W) %*% X
+    }
+    else{
+      tmp <- initial_method(X, ...) #a function to return reduced dimension data
+      if(ncol(tmp) > D | nrow(tmp) > N)
+        stop('The dimension reduction method passed need to return correct dimensions')
+      Z <- tmp[, 1:dimensions]
+      Z <- t(Z)
+    }
 
     if(is.null(ncenter)) {
         K <- N
@@ -128,7 +145,10 @@ DDRTree <- function(X,
     }
     else {
         K <- ncenter
-        kmean_res <- kmeans(t(Z), K)
+        if (K > ncol(Z))
+            stop("Error: ncenters must be greater than or equal to ncol(X)")
+        centers = t(Z)[seq(1, ncol(Z), length.out=K),]
+        kmean_res <- kmeans(t(Z), K, centers=centers)
         Y <- kmean_res$centers
         Y <- t(Y)
     }
@@ -138,5 +158,5 @@ DDRTree <- function(X,
     }
     ddrtree_res <- DDRTree_reduce_dim(X, Z, Y, W, dimensions, maxIter, K,  sigma,  lambda,  param.gamma, tol, verbose)
 
-    return(list(W = ddrtree_res$W, Z = ddrtree_res$Z, stree = ddrtree_res$stree, Y = ddrtree_res$Y, history = NULL))
+    return(list(W = ddrtree_res$W, Z = ddrtree_res$Z, stree = ddrtree_res$stree, Y = ddrtree_res$Y, X = ddrtree_res$X, objective_vals = ddrtree_res$objective_vals, history = NULL))
 }
